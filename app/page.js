@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import 'leaflet/dist/leaflet.css';
 
 const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
-const TAG_M = 10, OUT_SEC = 20, WALK_MS = 2;
+const MAX_AGE = 10000, TAG_M = 10, OUT_SEC = 20, WALK_MS = 2;
 const uid = () => Math.random().toString(36).slice(2, 8);
 const dist = (a, b) => {
   const r = Math.PI / 180, R = 6371000;
@@ -28,6 +28,7 @@ export default function Page() {
   const [myPos, setMyPos] = useState(null);
   const [tagReq, setTagReq] = useState(null);
   const [err, setErr] = useState('');
+  const [notice, setNotice] = useState('');
   const id = useRef(uid()).current;
   const ch = useRef(null), hist = useRef({}), pos = useRef(null), outSince = useRef(null);
   const map = useRef(null), layer = useRef(null), Lf = useRef(null);
@@ -54,6 +55,10 @@ export default function Page() {
         setCfg(payload.cfg); setRoles(payload.roles); setStartAt(Date.now() + 3000); setScreen('game');
       })
       .on('broadcast', { event: 'tagreq' }, ({ payload }) => { if (payload.runnerId === id) setTagReq(payload); })
+      .on('broadcast', { event: 'tagres' }, ({ payload }) => {
+        if (payload.hunterId !== id) return;
+        setNotice(payload.ok ? 'Tag confirmed!' : 'Runner declined the tag.'); setTimeout(() => setNotice(''), 4000);
+      })
       .on('broadcast', { event: 'out' }, ({ payload }) => setRoles(r => ({ ...r, [payload.id]: payload.to })))
       .subscribe(s => { if (s === 'SUBSCRIBED') channel.track({ name: name.trim(), host }); });
     ch.current = channel;
@@ -76,7 +81,7 @@ export default function Page() {
   useEffect(() => {
     if (screen !== 'game' || roles[id] === 'out') return;
     const s = () => pos.current && send('pos', { id, ...pos.current });
-    s(); const i = setInterval(s, 3000); return () => clearInterval(i);
+    s(); const i = setInterval(s, 2000); return () => clearInterval(i);
   }, [screen, roles[id]]);
 
   // keep screen awake
@@ -120,8 +125,10 @@ export default function Page() {
     else s = latest(k);
     if (s) marks.push({ k, r, s, kind });
   }
-  const target = playing && myRole === 'hunter' && myPos
-    ? alive.find(k => roles[k] === 'runner' && latest(k) && dist(myPos, latest(k)) <= TAG_M) : null;
+  const fresh = k => { const s = latest(k); return s && now - s.t < MAX_AGE ? s : null; };
+  const nearest = playing && myRole === 'hunter' && myPos
+    ? alive.filter(k => roles[k] === 'runner' && fresh(k)).map(k => ({ k, d: dist(myPos, fresh(k)) })).sort((a, b) => a.d - b.d)[0] : null;
+  const target = nearest && nearest.d <= TAG_M ? nearest.k : null;
 
   // boundary rule
   useEffect(() => {
@@ -192,13 +199,15 @@ export default function Page() {
     <div className="hud bottom">
       {playing && myRole === 'hunter' && <span>Next runner ping in {mmss((lastPing + interval - now) / 1000)}</span>}
       {outside && playing && <div className="warn">Outside the zone. Return in {Math.ceil(left)}s or you're out.</div>}
-      {target && <button className="red" onClick={() => send('tagreq', { hunterId: id, runnerId: target, hunter: name })}>Tag {players[target]?.name}</button>}
+      {notice && <div className="warn">{notice}</div>}
+      {playing && myRole === 'hunter' && <span className="dim">{nearest ? `Nearest runner: ${Math.round(nearest.d)} m (GPS ±${Math.round(myPos?.acc || 0)} m)` : 'No runner location received yet'}</span>}
+      {target && <button className="red" onClick={() => { send('tagreq', { hunterId: id, runnerId: target, hunter: name }); setNotice('Waiting for runner to confirm…'); }}>Tag {players[target]?.name}</button>}
       {playing && myRole !== 'out' && <button className="alt" onClick={() => send('out', { id, to: 'out' })}>I'm out</button>}
       {myRole === 'out' && !over && <span className="dim">You're out. Spectating hunters' view.</span>}
     </div>
     {tagReq && <div className="modal"><div><h3>{tagReq.hunter} says they tagged you</h3>
-      <button className="red" onClick={() => { send('out', { id, to: cfg.convert ? 'hunter' : 'out' }); setTagReq(null); }}>Yes, I'm tagged</button>
-      <button className="alt" onClick={() => setTagReq(null)}>No</button></div></div>}
+      <button className="red" onClick={() => { send('out', { id, to: cfg.convert ? 'hunter' : 'out' }); send('tagres', { hunterId: tagReq.hunterId, ok: true }); setTagReq(null); }}>Yes, I'm tagged</button>
+      <button className="alt" onClick={() => { send('tagres', { hunterId: tagReq.hunterId, ok: false }); setTagReq(null); }}>No</button></div></div>}
     {over && <div className="modal"><div><h2>{runnersLeft > 0 ? 'Runners win' : 'Hunters win'}</h2>
       {Object.entries(roles).map(([k, r]) => <div className="player" key={k}><span>{players[k]?.name || k}</span><span className="dim">{r}</span></div>)}
       <button onClick={() => location.reload()}>Back to home</button></div></div>}
