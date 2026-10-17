@@ -4,7 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import 'leaflet/dist/leaflet.css';
 
 const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
-const MAX_AGE = 10000, TAG_M = 10, OUT_SEC = 20, WALK_MS = 2;
+const MAX_AGE = 3000, TAG_M = 10, OUT_SEC = 20, WALK_MS = 2;
 const uid = () => Math.random().toString(36).slice(2, 8);
 const dist = (a, b) => {
   const r = Math.PI / 180, R = 6371000;
@@ -81,7 +81,7 @@ export default function Page() {
   useEffect(() => {
     if (screen !== 'game' || roles[id] === 'out') return;
     const s = () => pos.current && send('pos', { id, ...pos.current });
-    s(); const i = setInterval(s, 2000); return () => clearInterval(i);
+    s(); const i = setInterval(s, 500); return () => clearInterval(i);
   }, [screen, roles[id]]);
 
   // keep screen awake
